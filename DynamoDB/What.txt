@@ -1,0 +1,43 @@
+DynamoDB: Bài học vỡ lòng
+Giới thiệu về DynamoDB
+Chào bạn, nếu bạn cũng đang bắt đầu làm quen với DynamoDB giống như tôi, thì chúc mừng, chúng ta có cùng một điểm chung! Mới đầu, tôi cũng như “chú nai mới sinh”, nhìn vào DynamoDB mà cảm giác như bị lạc vào mê cung. Nhưng mà, sau một thời gian vật lộn, tôi nhận ra một điều: DynamoDB thật ra khá là hữu ích, nếu biết cách sử dụng đúng.
+
+Vậy, DynamoDB là gì nhỉ? Tại sao lại có mặt trong rất nhiều ứng dụng lớn như Amazon, Netflix, hay Airbnb? Hãy cùng tôi giải mã nhé!
+
+DynamoDB là gì?
+DynamoDB là một dịch vụ cơ sở dữ liệu NoSQL được quản lý hoàn toàn trên AWS. Nếu bạn đang quen với việc quản lý cơ sở dữ liệu truyền thống như MySQL hay PostgreSQL, bạn sẽ thấy DynamoDB có một sự khác biệt lớn: nó không sử dụng mô hình bảng quan hệ. Thay vào đó, nó sử dụng mô hình key-value hoặc document-oriented, tức là dữ liệu được lưu trữ dưới dạng các cặp khoá và giá trị.
+
+Điều đặc biệt của DynamoDB là nó serverless — nghĩa là bạn không cần phải lo về việc cấu hình hay bảo trì các máy chủ. AWS sẽ lo hết tất tần tật, và DynamoDB sẽ tự động mở rộng quy mô khi cần thiết.
+
+Difference between Relational database (SQL) and DynamoDB (NoSQL)
+
+Tại sao lại chọn DynamoDB?
+Để tôi kể bạn nghe lý do tại sao DynamoDB lại “ngon” đến vậy. DynamoDB có thể dễ dàng mở rộng quy mô, giúp xử lý một lượng dữ liệu cực lớn mà không gặp vấn đề về hiệu suất. Nhưng điều làm tôi ấn tượng nhất chính là tính tự động của nó. Khi ứng dụng của bạn có lưu lượng truy cập tăng mạnh, DynamoDB tự động điều chỉnh tài nguyên để phù hợp mà bạn không phải làm gì cả. Quá đã!
+
+Đây là vài lý do bạn sẽ yêu thích DynamoDB:
+
+Mở rộng dễ dàng: Không phải lo lắng về việc phải tăng dung lượng hay sức mạnh máy chủ. DynamoDB sẽ tự lo liệu hết cho bạn.
+Chi phí hợp lý: Bạn chỉ trả tiền cho những gì bạn sử dụng thực tế, chứ không phải trả cả đống tiền cho những thứ không dùng đến.
+Nhanh chóng: Truy vấn dữ liệu trong DynamoDB cực kỳ nhanh. Nếu bạn làm việc với các ứng dụng cần phản hồi nhanh, DynamoDB là lựa chọn cực kỳ lý tưởng.
+Sẵn sàng cao: Dữ liệu của bạn được sao lưu và phân tán qua nhiều vùng của AWS, giúp ứng dụng luôn hoạt động ổn định.
+DynamoDB auto scaling
+
+Các thành phần cơ bản của DynamoDB
+Chắc chắn rồi, khi bắt đầu với DynamoDB, bạn cần nắm vững các thành phần chính sau:
+
+Table: Đơn giản là bảng lưu trữ dữ liệu. Trong bảng, mỗi dữ liệu có thể được xác định bằng một primary key. Bạn có thể tưởng tượng bảng giống như một danh bạ điện thoại, trong đó mỗi mục có một tên riêng và thông tin liên quan.
+
+Primary Key: Là khoá chính để nhận diện mỗi mục trong bảng. Có hai kiểu primary key:
+
+Partition key: Mỗi mục dữ liệu được phân vùng bằng một key duy nhất.
+Composite key: Kết hợp giữa partition key và sort key để sắp xếp dữ liệu.
+Indexes: Nếu bạn muốn truy vấn dữ liệu nhanh hơn, bạn có thể sử dụng secondary indexes. Đây là cách giúp bạn tìm kiếm dữ liệu ngoài primary key một cách dễ dàng hơn.
+
+Provisioned vs. On-Demand Capacity: DynamoDB có hai chế độ dung lượng:
+
+Provisioned: Bạn tự xác định trước số lượng yêu cầu đọc và ghi.
+On-demand: DynamoDB sẽ tự động điều chỉnh dung lượng tuỳ theo nhu cầu thực tế.
+Kết luận
+Vậy là DynamoDB không phải là một cơ sở dữ liệu thông thường mà bạn cần phải cài đặt, cấu hình và duy trì. Thực tế, nó là một dịch vụ rất mạnh mẽ với khả năng mở rộng tự động, chi phí hợp lý và tốc độ cực nhanh. Tuy nhiên, điều quan trọng là bạn phải hiểu đúng cách sử dụng nó để tận dụng tối đa sức mạnh của DynamoDB.
+
+Cảm ơn bạn đã theo dõi bài viết này, và hy vọng bạn đã có cái nhìn cơ bản về DynamoDB. Hãy cùng tôi tiếp tục cuộc hành trình này nhé, còn nhiều điều thú vị đang chờ đợi!
