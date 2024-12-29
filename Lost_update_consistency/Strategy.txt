@@ -1,0 +1,351 @@
+Lost Update: Tồn kho còn 1, nhiều người cùng order thì xử lý thế nào?
+Trending
+I. Giới thiệu
+Hãy tưởng tượng bạn đang xây dựng một sàn thương mại điện tử và gặp phải tình huống sản phẩm chỉ còn 1, nhưng có đến 2 khách hàng đặt hàng cùng lúc. Làm thế nào để hệ thống xử lý tình huống này một cách chính xác, tránh sai sót? Đây chính là một thách thức phổ biến khi xử lý nhiều transaction đồng thời.
+
+Vấn đề này thường liên quan đến khái niệm race condition, trong đó các giao dịch song song sẽ tranh chấp quyền thao tác trên dữ liệu, dẫn đến những tình trạng sai lệch như lost update.
+
+Trong bài viết này, chúng ta sẽ cùng khám phá các phương pháp xử lý tình huống này, từ những cách tiếp cận cơ bản cho đến các giải pháp tiên tiến dành cho hệ thống phân tán.
+
+II. Các phương pháp
+1. Atomic Operation
+Atomic là một hoặc một nhóm thao tác được thực hiện như một đơn vị không thể chia nhỏ. Nói cách khác, các thao tác này sẽ xảy ra hoàn toàn hoặc không xảy ra gì cả, và luôn đảm bảo rằng không có tác động từ bên ngoài khi đang thực hiện.
+
+Nhiều người lầm tưởng rằng nếu không sử dụng lock thủ công, các thao tác sẽ không được bảo vệ. Nhưng thực tế, trong database hỗ trợ ACID, các câu lệnh như UPDATE và DELETE sẽ tự động sử dụng cơ chế row-level locking để đảm bảo tính toàn vẹn dữ liệu.
+
+Khi một câu lệnh như UPDATE được thực thi, database sẽ tìm đến các row khớp với điều kiện và khóa chúng lại. Điều này đảm bảo rằng tại một thời điểm chỉ có 1 transaction được thực hiện. Các transaction khác sẽ phải chờ khóa được giải phóng.
+
+Ví dụ, thay vì để 2 câu query như này:
+
+SELECT quantity FROM inventory WHERE id = 123; // quantity = 1
+// logic check nếu quantity > 0
+UPDATE inventory 
+SET quantity = quantity - 1 
+WHERE id = 123
+
+Vấn đề: Câu lệnh này không đảm bảo an toàn vì 2 người dùng có thể cùng thấy quantity = 1 và tiến hành UPDATE. Kết quả là tồn kho có thể bị giảm về âm, gây ra tình trạng lost update.
+
+Giải pháp tốt hơn:
+
+UPDATE inventory 
+SET quantity = quantity - 1 
+WHERE id = 123 AND quantity > 0;
+
+-- Check số rows affected
+SELECT ROW_COUNT();
+
+Câu lệnh UPDATE ... WHERE quantity > 0 đảm bảo rằng chỉ có 1 transaction thực hiện thành công. Nếu quantity = 0, điều kiện WHERE không thỏa mãn và transaction còn lại sẽ bị từ chối, tránh sai lệch dữ liệu.
+
+Ưu điểm:
+
+Đơn giản, dễ triển khai mà vẫn đảm bảo tính chính xác và tránh được tình trạng lost update.
+Đảm bảo hiệu năng tốt cho hệ thống nhỏ hoặc vừa: thay vì bạn phải tự triển khai các phương pháp lock phức tạp thì database sẽ tự động xử lý việc khóa và giải phóng, giúp tối ưu hiệu suất.
+Nhược điểm:
+
+Atomic operation chủ yếu phù hợp với các tác vụ đơn giản, nó không phù hợp với yêu cầu phức tạp với nhiều điều kiện đi kèm.
+2. Isolated level
+ACID là một bộ các thuộc tính của transaction trong hệ quản trị cơ sở dữ liệu nhằm đảm bảo tính nhất quán và an toàn của dữ liệu. Trong đó, yếu tố Isolation giúp đảm bảo các transaction được thực thi một cách độc lập, không phụ thuộc lẫn nhau. Đây là yếu tố quyết định cách hệ thống xử lý xung đột dữ liệu, đặc biệt là trong môi trường có nhiều người dùng truy cập cùng lúc.
+
+Isolated level có 4 mức độ khác nhau. Chúng ta sẽ cùng xem nó giải quyết vấn đề lost update như thế nào nhé!
+
+2.1. Read uncommitted
+Đây là level thấp nhất trong các mức độ Isolation. Ở mức này, một transaction có thể đọc dữ liệu chưa được commit từ transaction khác. Vấn đề này được gọi là đọc bẩn (dirty read).
+
+Lưu ý: Vì dữ liệu "bẩn" nên không thể xử lý được lost update ở mức này.
+
+Ví dụ:
+Có 2 người dùng (Tx1, Tx2) lần lượt mua sản phẩm (với inventory hiện tại = 2):
+
+Tx1: Bấm nút đặt hàng thành công. Hệ thống bắt đầu trừ tồn kho, sau đó tạo một đơn hàng. Nhưng do lỗi ở bước tạo đơn hàng, transaction này phải rollback.
+Tx2: Đặt hàng cùng lúc và hoàn thành toàn bộ quy trình một cách trọn vẹn.
+BEGIN TRANSACTION
+UPDATE inventory
+SET quantity = quantity - 1
+WHERE id = 123
+
+// logic tạo đơn hàng
+COMMIT;
+
+Vấn đề:
+
+Tx1 thực hiện UPDATE từ quantity = 2 xuống quantity = 1 nhưng chưa commit.
+Tx2 đọc dữ liệu chưa được commit (dirty read) và tiếp tục giảm quantity từ 1 xuống 0.
+Khi Tx1 rollback, tồn kho sẽ bị sai lệch vì transaction của Tx2 dựa trên dữ liệu không chính xác.
+Time	Tx1	Tx2
+T1	BEGIN TRANSACTION	
+T2	Read inventory =2	BEGIN TRANSACTION
+T3	Set inventory = 1	Read inventory = 1 (dirty read)
+T4	Payment processing	Update quantity = 0
+T5	Fail -> rollback	Payment processing
+T6		Commit
+Ưu điểm:
+
+Hiệu suất cao nhất trong các cấp isolation. Vì không cần đợi transaction khác commit.
+Phù hợp với các trường hợp cần tốc độ đọc nhanh và có thể chấp nhận sai số.
+Nhược điểm:
+
+Không đảm bảo tính nhất quán: Transaction có thể đọc dữ liệu dirty read dẫn đến sai lệch dữ liệu nếu transaction khác rollback. Do đó không nên sử dụng cho các thao tác quan trọng, như liên quan đến tồn kho hay tiền bạc.
+2.2. Read committed
+Ở mức level này, transaction chỉ đọc được dữ liệu đã được commit. Điều này đảm bảo không xảy ra dirty read.
+
+Tuy nhiên, mức này vẫn không xử lý được lost update.
+
+Giả sử tồn kho còn quantity = 1. Có 2 người cùng đặt hàng:
+
+select id, quantity 
+from inventory 
+where id = 123;
+// quantity = 1, tiếp tục thực hiện...
+
+update inventory 
+set quantity = quantity - 1 
+where id = 123;
+// quantity lúc này là 0, dẫn tới update quantity thành -1
+
+Tx1 và Tx2 cùng đọc quantity = 1.
+Cả hai cùng update thành công, dẫn đến tồn kho bị giảm quá mức và hệ thống tạo ra 2 đơn hàng thành công.
+Time	TX1	TX2
+T1	BEGIN	BEGIN
+T2	Read quantity=1	Read quantity=1
+T3	Update quantity=0	
+T4	Commit	Update quantity=0
+T5		Commit
+Ưu điểm:
+
+Ngăn chặn được hiện tượng dirty read, đảm bảo dữ liệu chỉ được đọc sau khi đã commit.
+Đáp ứng đủ tính nhất quán cho các trường hợp đơn giản, như:
+Các thao tác không cần kiểm tra lại dữ liệu nhiều lần.
+Các hệ thống có ít transaction đồng thời và không yêu cầu tính nhất quán cao.
+Nhược điểm:
+
+Gây ra hiện tượng Non-repeatable read, tức là dữ liệu có thể thay đổi giữa các lần đọc trong cùng một transaction. Điều này dẫn đến lỗi lost update, như ví dụ đã trình bày.
+Không phù hợp với:
+Hệ thống có nhiều transaction đồng thời, dễ xảy ra xung đột dữ liệu.
+Các tác vụ yêu cầu tính nhất quán cao, đặc biệt là các tác vụ liên quan đến tồn kho, tiền bạc.
+2.3. Repeatable read
+Cấp độ này đảm bảo rằng trong một transaction data sẽ không thay đổi bởi các transaction khác, ngay cả khi có các cập nhật dữ liệu đồng thời.
+
+-- Đọc dữ liệu ban đầu
+select id, quantity from inventory where id = 123; // quantity = 1
+
+-- Trong khi đó, một transaction khác có thể đã thay đổi quantity thành 0
+
+-- Tuy nhiên, câu lệnh update của bạn vẫn sẽ lấy giá trị quantity là 1
+update inventory 
+set quantity = quantity - 1 where id = 123; // quantity = 1
+
+Nhìn qua thì có vẻ level này không thể xử lý được lost update. Nếu quantity thực tế là 0, mà data mình thấy lại là 1 thì toang rồi. Nhưng mà câu trả lời là tuỳ.
+
+SQL Server sử dụng pessimistic locking một cách ngầm đinh (implicit lock), nơi mà transaction phải lấy lock trước khi thực hiện các thao tác để ngăn các transaction khác thay đổi dữ liệu.
+
+Khi SELECT nó sử dụng cơ chế shared lock, các transaction khác chỉ có thể đọc, không thể thay đổi dữ liệu cho đến khi giải phóng lock.
+
+UPDATE/DELETE sử dụng cơ chế exclusive lock, các transaction khác sẽ không được đọc và thay đổi dữ liệu cho đến khi giải phóng lock.
+
+Nhờ vào cơ chế của pessimistic lock nên chỉ có một transaction được phép update tại một thời điểm. Nhờ đó, vấn đề lost update được giải quyết. Hoan hô
+
+Time	TX1	TX2
+T1	BEGIN	BEGIN
+T2	Đặt exclusive lock	
+T3	Read quantity=1	Đợi lock từ TX1
+T4	Update quantity=0	
+T5	COMMIT	
+T6		Đặt exclusive lock
+T7		Đọc quantity=0
+T8		ROLLBACK
+.
+
+Với MySQL thì không sử dụng pessimistic lock ngầm định, bạn phải hỉ định một cách tường minh (explicit lock) bằng câu lệnh FOR UPDATE. Nếu không sẽ không đảm bảo tính nhất quán trong trường hợp có xung đột dữ liệu.
+
+Với PostgreSQL thì sử dụng MVCC (Multi-Version Concurrency Control). Thay vì lock, mỗi lần cập nhật PostgreSQL sẽ tạo ra một bản ghi mới (new row). Các transaction khác vẫn thấy được bản ghi cũ (row cũ), nhưng khi commit sẽ kiểm tra trạng thái bản ghi. Nếu bản ghi cũ đã expired, hệ thống sẽ báo lỗi serialization error, buộc transaction phải retry.
+
+Ưu điểm:
+
+Đảm bảo dữ liệu đồng nhất trong cùng một transaction, tránh hiện tượng non-repeatable read.
+Xử lý được** lost update** nhờ cơ chế như pessimistic locking hoặc MVCC (tuỳ cơ sở dữ liệu).
+Nhược điểm:
+
+Không giải quyết được hiện tượng phantom read: Khi một transaction thêm dữ liệu mới, transaction khác vẫn có thể nhìn thấy dữ liệu này, gây ra sự không nhất quán trong một số trường hợp. Để xử lý triệt để phantom read, bạn cần sử dụng cấp độ cao hơn là Serializable.
+2.4. Serializable read
+Đây là cấp độ cô lập cao nhất trong các hệ quản trị cơ sở dữ liệu. Cấp độ này đảm bảo rằng các giao dịch được thực thi tuần tự như thể chúng xảy ra từng cái một, thay vì đồng thời. Điều này mang lại tính toàn vẹn tối đa cho dữ liệu và cũng ngăn chặn được lost update.
+
+Note: Trong MySQL, khi sử dụng cấp độ này, cơ chế pessimistic locking sẽ được kích hoạt một cách ngầm định (implicit lock).
+
+Nói qua một chút về việc tại sao cần có level này. Ở cấp độ Serializable, ngoài việc đảm bảo dữ liệu không thay đổi giữa các lần đọc, nó còn bổ sung cơ chế kiểm tra phạm vi truy vấn (range query). Cơ chế này giúp ngăn chặn việc INSERT các bản ghi mới nếu chúng rơi vào phạm vi dữ liệu mà transaction hiện tại đang truy vấn hoặc quản lý.
+
+Ví dụ: Một transaction Tx1 thực hiện truy vấn để kiểm tra tất cả các sản phẩm có giá nhỏ hơn 100.
+
+SELECT * FROM products WHERE price < 100;
+
+Trong thời gian Tx1 thực hiện truy cập, nếu một transaction khác cố gắng thêm một sản phẩm mới với giá dưới 100, hệ thống sẽ chặn giao dịch này lại cho đến khi transaction hiện tại hoàn tất.
+
+2.5 Tóm lại
+Isolated level không được thiết kế chuyên biệt để xử lý lost update, nhưng nó có thể giải quyết vấn đề này một cách gián tiếp thông qua các cơ chế như pessimistic lock, MVCC được tích hợp trong một số hệ quản trị cơ sở dữ liệu.
+
+Đối với các cấp độ Repeatable Read và Serializable Read, có thể ngăn chặn lost update. Nhưng hiệu quả phụ thuộc vào cách mà từng cơ sở dữ liệu triển khai. Do đó, nếu muốn triển khai ngăn chặn lost update hoặc đảm bảo tính nhất quán tối đa, cần xem xét kỹ lưỡng cách mà hệ quản trị cơ sở dữ liệu cụ thể hoạt động ở từng cấp độ isolation.
+
+3. Pessimistic lock
+Pessimistic Lock là chiến lược quản lý dữ liệu bằng cách chủ động khóa bản ghi trước khi thay đổi. Cơ chế này đảm bảo rằng các thao tác khác không thể tác động lên dữ liệu bị khóa cho đến khi giao dịch hoàn tất. Khác với cơ chế tự động khóa của isolation level trong cơ sở dữ liệu, bạn có thể tự thực hiện câu lệnh khóa trực tiếp.
+
+BEGIN;
+SELECT * FROM inventory 
+WHERE id = 123 FOR UPDATE;  -- Đặt lock cho row này
+
+UPDATE inventory 
+SET quantity = quantity - 1 
+WHERE id = 123;
+COMMIT;
+
+Pessimistic Lock đảm bảo độ an toàn dữ liệu cao, đặc biệt phù hợp với hệ thống có nhiều giao dịch xung đột hoặc cần xử lý dữ liệu quan trọng như thanh toán. Với các hệ thống này, việc đảm bảo dữ liệu nhất quán và ngăn chặn sai lệch là yếu tố bắt buộc.
+
+Nhược điểm:
+
+Deadlock: Nếu một giao dịch khóa dữ liệu nhưng không hoàn thành (ví dụ, người dùng quên thanh toán), các giao dịch khác sẽ phải chờ. Điều này làm giảm hiệu suất và gây bế tắc nếu không có cơ chế giải quyết hợp lý. Một giải pháp thường sử dụng là đặt thời gian giới hạn. Ví dụ: nếu người dùng không thanh toán trong 10 phút, hệ thống sẽ giải phóng khóa thông qua cronjob hoặc các cơ chế kiểm tra khác.
+
+Không phù hợp cho hệ thống phân tán: Pessimistic lock chỉ hoạt động hiệu quả trong một cơ sở dữ liệu cục bộ. Trong môi trường phân tán, việc đồng bộ hóa khóa giữa các nút cơ sở dữ liệu là thách thức lớn và thường không khả thi với các cơ sở dữ liệu truyền thống.
+
+Pessimistic Lock có thể xử lý hiệu quả các vấn đề như lost update hoặc xung đột dữ liệu, nhưng nó phù hợp hơn với các hệ thống đơn giản hoặc có số lượng giao dịch vừa phải. Trong trường hợp có nhiều người dùng, nhu cầu xử lý giao dịch đồng thời cao, độ trễ do phải chờ khóa có thể gây ra trải nghiệm không tốt và làm giảm hiệu năng của hệ thống.
+
+Tóm lại, đây là giải pháp đáng tin cậy cho các hệ thống quan trọng như quản lý tài chính, nhưng không phải là lựa chọn tối ưu cho hệ thống có quy mô lớn hoặc yêu cầu mở rộng cao.
+
+4. Optimistic lock
+Optimistic lock là cơ chế kiểm soát đồng thời cho phép nhiều giao dịch cùng truy cập và thay đổi dữ liệu mà không cần khóa từ đầu. Thay vào đó, hệ thống sẽ phát hiện xung đột tại thời điểm commit bằng cách kiểm tra xem dữ liệu có bị thay đổi bởi giao dịch khác hay không. Một cách phổ biến để thực hiện việc này là sử dụng version control, trong đó mỗi bản ghi được gắn một phiên bản (version) như timestamp, số tăng dần hoặc UUID...
+
+Khi một transaction thực hiện cập nhật, nó kiểm tra phiên bản của bản ghi. Nếu phiên bản hiện tại khác với phiên bản mà transaction nắm giữ, câu lệnh UPDATE sẽ không thành công (0 rows affected).
+
+-- Lấy version hiện tại
+_version := SELECT version FROM inventory WHERE id = 123;
+
+UPDATE inventory  -- Cập nhật với điều kiện version không đổi
+SET quantity = quantity - 1
+WHERE id = 123 
+AND version = _version;
+
+Time	TX1	TX2
+T1	Đọc version=1	
+T2		Đọc version=1
+T3	Update quantity = 0	
+T4	Commit thành công, version = 2	Update thất bại do version ≠ 1
+T5		Không tìm thấy bản ghi
+Khi Tx1 cập nhật thành công, phiên bản tăng từ 1 lên 2. Tx2 không thể cập nhật do điều kiện version không khớp.
+
+Phương pháp này có ưu điểm là Hiệu năng cao hơn pessimistic lock nhờ việc không sử dụng lock. Mà không sử dụng lock thì cũng không lo vấn đề deadlock luôn.
+
+Nhược điểm thì Không phù hợp với tỷ lệ xung đột cao: Nếu nhiều transaction truy cập cùng lúc, thì sẽ chỉ một transaction thành công. Các cái còn lại bị fail và cần retry, ảnh hưởng đến trải nghiệm người dùng.
+
+Khi nào nên sử dụng?
+
+Hệ thống ít xung đột và có thể chấp nhận retry: Ví dụ chỉnh sửa blog, cập nhật trạng thái.
+Hệ thống phân tán cần giảm chi phí đồng bộ dữ liệu.
+Khi nào không nên sử dụng?
+
+Bài toán yêu cầu độ chính xác ngay lần đầu, như thanh toán ngân hàng.
+Môi trường có tỷ lệ giao dịch đồng thời cao sẽ không phù hợp vì nó bắt người dùng retry ảnh hưởng tới trải nghiệm người dùng.
+Tổng kết, optimistic lock phù hợp với các bài toán ít xung đột và cần ưu tiên hiệu suất cao. Tuy nhiên, nếu tỷ lệ xung đột cao hoặc yêu cầu độ chính xác ngay lần đầu, nên cân nhắc các giải pháp khác.
+
+5. Distributed lock
+Distributed Lock là cơ chế kiểm soát truy cập trong hệ thống phân tán nhằm đảm bảo rằng tại một thời điểm chỉ có một transaction được phép truy cập và thay đổi dữ liệu. Với tình huống giải quyết lost update thì cơ chế này tương tự như pessimistic lock đó là lấy lock trước, cập nhật sau, nhưng nó mở rộng hoạt động từ một server đơn lẻ sang nhiều server khác nhau.
+
+Time	TX1	TX2
+T1	Yêu cầu lấy lock	Yêu cầu lấy lock
+T2	Locked	
+T3	Cập nhật tồn kho	Đợi lock
+T4	Giải phóng lock	Locked
+T5		Cập nhật tồn kho
+T6		Giải phóng lock
+Một trong những cách đơn giản nhất để triển khai Distributed Lock là sử dụng Database-based locking, trong đó bạn tạo ra một bảng trong cơ sở dữ liệu để đánh dấu việc lock dữ liệu. Tuy nhiên, phương pháp này thường có độ trễ cao và không thể xử lý hiệu quả khi hệ thống có độ truy cập cao.
+
+Một giải pháp hiệu quả hơn là sử dụng các công cụ lưu trữ dữ liệu như Redis (in-memory), Zookeeper hoặc etcd (được tối ưu hóa cho khả năng phân tán và đồng bộ hóa dữ liệu). Tại sao nó tốt hơn? Ví dụ với redis đi, đây là một công cụ phổ biển được sử dụng cho distributed lock nhờ tốc độ truy vấn nhanh vì lưu in-memory cùng tính năng TTL (Time-to-Live), giúp tự động giải phóng khóa sau một khoảng thời gian nhất định, tránh tình trạng deadlock nếu có sự cố xảy ra trong quá trình giao dịch.
+
+Ưu điểm:
+
+Tính toàn vẹn và đồng bộ cao: Distributed lock giúp ngăn ngừa tình trạng "Lost Update", đảm bảo rằng chỉ một giao dịch duy nhất có thể thực hiện thao tác thay đổi dữ liệu.
+
+Scale tốt hơn: Có thể xử lý lock requests từ nhiều application instances mà không bị giới hạn bởi kết nối cơ sở dữ liệu, với hiệu suất tốt hơn nhờ vào hệ thống in-memory như Redis.
+
+Nhược điểm:
+
+Độ trễ do network: Việc acquire/release lock có thể gây ra độ trễ nếu hệ thống không được tối ưu hóa tốt. Đối với các hệ thống nhỏ hoặc ít concurrency, bạn có thể cân nhắc sử dụng các phương pháp đơn giản để giảm độ trễ.
+
+Chi phí vận hành cao hơn: Khi sử dụng dịch vụ bên thứ ba như Redis, bạn sẽ phải duy trì thêm một layer ngoài hệ thống của mình, điều này có thể làm tăng chi phí và độ phức tạp vận hành.
+
+Distributed lock thích hợp cho việc xử lý race condition trong hệ thống microservice, nơi có nhiều tác vụ đồng thời cần được đảm bảo tính nhất quán của dữ liệu. Trong trường hợp các phương pháp thông thường khó kiểm soát hoặc độ trễ cao, việc sử dụng distributed lock là một giải pháp hiệu quả.
+
+6. Queue
+Đây là giải pháp sử dụng Queue để xử lý các request theo thứ tự. Tất cả request sẽ được đưa vào một hàng đợi FIFO (vào trước ra trước) và xử lý tuần tự, đảm bảo tính nhất quán của dữ liệu.
+
+Time	Tx1	Tx2
+T1	Vào hàng đợi	
+T2		Vào hàng đợi
+T4	Update tồn kho	
+T5	Thành công	Kiểm tra tồn kho thấy hết hàng
+T6		Fail
+Ưu điểm:
+
+Giảm tải cho database: Các thao tác xử lý được thực hiện tuần tự bởi worker, tránh tình trạng nhiều transaction cùng tranh chấp dữ liệu.
+Đảm bảo tính công bằng: Hệ thống xử lý theo thứ tự request, không có giao dịch ưu tiên.
+Ổn định ngay cả khi có nhiều request đồng thời: Ví dụ, hàng nghìn người cùng đặt vé concert có thể được xếp hàng mà không làm quá tải database.
+Nhược điểm:
+
+Thời gian chờ đợi có thể rất lớn: Như sự kiện âm nhạc Anh trai say hi sử dụng phương pháp này, dẫn tới có một hàng đợi dài hơn 170k người dùng, mỗi người sẽ có 10 phút để thanh toán. Tính ra phải mất 28 ngày mới xử lý hết queue. (Có lẽ họ muốn làm marketing là chính).
+Trong trường hợp này, có thể tăng hiệu suất bằng cách chia queue thành các partition dựa trên một số tiêu chí (ví dụ: loại sản phẩm như vé VIP hoặc vé thường, hoặc khu vực khán đài A, B...), nhưng điều này sẽ tăng độ phức tạp hệ thống. Để giải quyết triệt để, có thể cần kết hợp Queue với các phương pháp khác như reversed counter sẽ được đề cập ở phần sau.
+
+Trường hợp sử dụng:
+
+Hệ thống bán vé concert/event: Đảm bảo không có hai người cùng đặt một vé.
+Hệ thống yêu cầu tính công bằng cao: Ví dụ, các đơn hàng được xử lý tuần tự không ưu tiên.
+Trường hợp không sử dụng:
+
+Ứng dụng yêu cầu thời gian phản hồi nhanh: Ví dụ flash sale, nơi người dùng không thể chờ đợi.
+Ứng dụng có lượng traffic nhỏ: Hàng đợi có thể không cần thiết và làm tăng độ phức tạp của hệ thống.
+7. Reserved Counter
+Trong các hệ thống e-commerce, đặc biệt là trong các chiến dịch flash sale, số lượng người mua đồng thời có thể rất cao. Việc sử dụng lock để đồng bộ dữ liệu có thể gây ra:
+
+Độ trễ lớn cho người dùng, do phải chờ các transaction hoàn thành.
+Tăng tải ghi (write contention) vào database, làm giảm hiệu năng hệ thống.
+Reserved Counter là giải pháp bổ trợ giúp giảm áp lực vào database và cải thiện trải nghiệm người dùng. Counter được lưu trữ trong một storage tạm thời và hoạt động như một bộ đếm trung gian để quản lý số lượng hàng đang được đặt. Chỉ khi người dùng thanh toán thành công, hệ thống mới cập nhật tồn kho thực tế trong database chính.
+
+Storage cho Reserved Counter có thể là:
+
+In-memory database như Redis, Memcached
+Cache layer như Hazelcast, Apache Ignite
+Database riêng biệt để tracking reserved quantity
+Application memory (với các ứng dụng đơn giản)
+Trong đó Redis là lựa chọn phổ biến vì hỗ trợ atomic operation với các lệnh như INCR, DECR và có tính năng auto-expire tiện lợi.
+
+Cơ chế hoạt động:
+
+Khởi tạo: Reserved Counter được đồng bộ với số lượng tồn kho thực từ database
+Khi người dùng đặt hàng, hệ thống sẽ giảm counter trong Redis.
+DECR product_id # giảm counter
+EXPIRE product_id:user_id 600  # Giữ chỗ trong 10 phút
+
+Nếu counter >= 0: cho phép đặt hàng và giữ chỗ trong một khoảng thời gian.
+Nếu counter < 0: từ chối và thông báo hết hàng ngay lập tức.
+Khi người dùng thanh toán:
+Thành công: Cập nhật tồn kho thực tế trong database.
+Thất bại hoặc timeout: Tự động hoàn lại số lượng vào counter.
+PERSIST product_id:user_id
+
+Ưu điểm:
+
+Giảm tải cho hệ thống và cải thiện tốc độ phản hồi: Việc sử dụng storage tạm thời giúp giảm đáng kể số lượng query vào database chính. Người dùng có thể nhận phản hồi nhanh chóng về tình trạng hàng hóa mà không cần chờ xử lý từ database chính.
+Nhược điểm:
+
+Mặc dù giúp giảm tải, nhưng ở giai đoạn cuối khi cần cập nhật tồn kho thực tế tại database, và bài toán lost update vẫn còn đó, bạn vẫn phải sử dụng một phương pháp đảm bảo tính toàn vẹn dữ liệu (consistency) để tránh lost update.
+Phức tạp trong xử lý lỗi: Hệ thống cần xử lý nhiều kịch bản phức tạp như:
+Đồng bộ dữ liệu giữa storage tạm thời và database chính.
+Xử lý khi storage tạm thời gặp sự cố.
+Đảm bảo tính nhất quán khi có lỗi mạng hoặc timeout.
+Khôi phục trạng thái khi một phần của hệ thống gặp sự cố.
+III. Kết luận
+Lost update là một vấn đề phổ biến trong các hệ thống xử lý đồng thời, đặc biệt khi dữ liệu bị cập nhật bởi nhiều tiến trình hoặc dịch vụ. Qua bài viết, chúng ta đã tìm hiểu nhiều phương pháp để giải quyết vấn đề này, từ cách tiếp cận đơn giản như Isolated Level đến các giải pháp nâng cao như Optimistic Lock, Pessimistic Lock, Distributed Lock, Queue, và Atomic Operation.
+
+Để chọn ra phương pháp nào phù hợp thì Không có giải pháp "tốt nhất" cho mọi tình huống. Việc lựa chọn phương pháp phụ thuộc vào yêu cầu cụ thể của hệ thống. Đôi khi, kết hợp các phương pháp để có thể mang lại kết quả tốt nhất.
+
+Khi thiết kế hệ thống, cần cân nhắc 3 yếu tố quan trọng:
+
+Tính nhất quán: Ví dụ với các hệ thống tài chính hoặc dữ liệu quan trọng, đảm bảo tính nhất quán luôn là ưu tiên hàng đầu.
+Hiệu năng: Đối với các hệ thống e-commerce tốc độ xử lý là yếu tố sống còn. Nhưng với các concert đôi khi để cho người dùng chờ đợi lại càng tạo hiệu ứng marketing tốt.
+Tính phức tạp: Các hệ thống nhỏ có thể dùng giải pháp đơn giản, nhưng với hệ thống lớn, cần những giải pháp chuyên biệt và tối ưu.
+Hy vọng qua bài viết này, bạn có thể lựa chọn phương pháp phù hợp để xử lý lost update trong hệ thống của mình. Việc áp dụng đúng phương pháp không chỉ giúp cải thiện hiệu năng mà còn đảm bảo hệ thống hoạt động ổn định và chính xác trong mọi tình huống.
